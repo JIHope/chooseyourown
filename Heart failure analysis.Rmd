@@ -1,0 +1,387 @@
+---
+title: "Heart failure analysis"
+author: "Jody Iabichino"
+date: "16/11/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.width = 10, fig.height = 3.2)
+```
+
+```{r packages, include=FALSE}
+if(!require(utils)) install.packages("utils", repos = "http://cran.us.r-project.org")
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(lubridate)) install.packages("lubridate", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(rpart)) install.packages("rpart", repos = "http://cran.us.r-project.org")
+if(!require(rpart.plot)) install.packages("rpart.plot", repos = "http://cran.us.r-project.org")
+if(!require(randomForest)) install.packages("randomForest", repos = "http://cran.us.r-project.org")
+if(!require(knitr)) install.packages("knitr", repos = "http://cran.us.r-project.org")
+
+library(utils)
+library(tidyverse)
+library(lubridate)
+library(caret)
+library(rpart.plot)
+library(rpart)
+library(randomForest)
+library(knitr)
+```
+
+# 1. Introduction
+
+Cardiovascular diseases kill approximately 17 million people globally every year, and they mainly exhibit as myocardial infarctions and heart failures. Heart failure (HF) occurs when the heart cannot pump enough blood to meet the needs of the body.
+
+The scope of the analysis was death event prediction. We analized a dataset of 299 patients with heart failure collected in 2015.
+
+The dataset used for the analysis came from the following link of UCI Machine Learning Repository:
+https://archive.ics.uci.edu/ml/machine-learning-databases/00519/heart_failure_clinical_records_dataset.csv
+
+[License: Davide Chicco, Giuseppe Jurman: "Machine learning can predict survival of patients with heart failure from serum creatinine and ejection fraction alone". BMC Medical Informatics and Decision Making 20, 16 (2020).]
+
+The patients consisted of 105 women and 194 men, and their ages ranged between 40 and 95 years old. All 299 patients had left ventricular systolic dysfunction and had previous heart failures that put them in classes III or IV of New York Heart Association (NYHA) classification of the stages of heart failure.
+
+The dataset contained 13 features, which reported clinical, body, and lifestyle information, that we briefly describe here:
+
+- age: age of the patient (years);
+
+- anaemia: decrease of red blood cells or hemoglobin (boolean);
+
+- high blood pressure: if the patient has hypertension (boolean);
+
+- creatinine phosphokinase (CPK): level of the CPK enzyme in the blood (mcg/L);
+
+- diabetes: if the patient has diabetes (boolean);
+
+- ejection fraction: percentage of blood leaving the heart at each contraction (percentage);
+
+- platelets: platelets in the blood (kiloplatelets/mL);
+
+- sex: woman or man (binary);
+
+- serum creatinine: level of serum creatinine in the blood (mg/dL);
+
+- serum sodium: level of serum sodium in the blood (mEq/L);
+
+- smoking: if the patient smokes or not (boolean);
+
+- time: follow-up period (days);
+
+- death event (target): if the patient deceased during the follow-up period (boolean);
+
+
+Like we report, some features were binary: anaemia, high blood pressure, diabetes, sex, and smoking. The hospital physician considered a patient having anaemia if haematocrit levels were lower than 36%. Unfortunately, the original dataset manuscript provided no definition of high blood pressure.
+
+The idea behind this analysis was that a machine learning algorithm could be performed with this data to predict death event.
+
+So, after some steps of data cleaning and data exploration, the dataset was splitted into two separate datasets: a “training set” and a “test set”. According to machine learning standards, the development and training of the algorithms was made on the “training set”, while the final RMSE was evaluated on the “test set”.
+
+We tried to use three kinds of different models and the model with the lowest RMSE achievable was finally chosen as the best model. RMSE is a measure of "goodness of fit", calculated as the square root of the average through all the observations of the difference squared between death event counts and predicted death event counts.
+
+In the last chapter of the analysis, we have tried to propose some suggestions for future developments.
+
+# 2. Analysis
+## 2.1 Downloading
+
+Before starting with the actual data exploration, the zipper file containing all the necessary data was downloaded:
+
+```{r load}
+url <- "https://archive.ics.uci.edu/ml/machine-learning-databases/00519/heart_failure_clinical_records_dataset.csv"
+path <- file.path("~", "heart_failure_clinical_records_dataset.csv")
+download.file(url, path)
+dataset <- read.table(path, 
+                      header = TRUE, 
+                      sep = ",",
+                      stringsAsFactors = FALSE)
+
+```
+
+## 2.2 Data cleaning
+
+At this point, we analyzed the database to understand its structure, also by analyzing its first rows:
+
+```{r, message=FALSE}
+str(dataset)
+head(dataset)
+```
+
+At the end of the first check, we have verified that there were no missing values to be dealt with:
+
+```{r }
+sum(is.na(dataset))
+```
+And no missing value was detected.
+
+## 2.3 Data exploration
+
+Having verified that the database was clean, we explored the variables through a series of quick statistics.
+
+## a. Death_event
+
+```{r }
+knitr::kable(table(dataset$DEATH_EVENT)) 
+```
+
+The survived patients (death event = 0) were 203, while the dead patients (death event = 1) were 96.
+
+## b. Serum_creatinine
+
+```{r }
+dataset %>%
+  summarize(min_serum = min(serum_creatinine),
+            max_serum = max(serum_creatinine)) 
+```
+
+Serum creatinine ranged from 0.5 to 9.4. We groupped the values of the variable into bands so that we could better analyze its behavior.
+
+```{r }
+dataset <- dataset %>% 
+  mutate(serum_range = as.factor(case_when(serum_creatinine <= 1.5 ~ "<=1.5",
+                                           serum_creatinine >1.5 & serum_creatinine <=3 ~ "1.5-3",
+                                           serum_creatinine >3 & serum_creatinine <=4.5 ~ "3-4.5",
+                                           serum_creatinine >4.5 & serum_creatinine <=6 ~ "4.5-6",
+                                           serum_creatinine >6 ~ ">6"
+  ))) 
+
+knitr::kable(table(dataset$serum_range, dataset$DEATH_EVENT))
+
+```
+Frequencies showed that for high values of the variable, there was a higher probability that the patient would die.
+
+## c. Ejection_fraction
+
+```{r }
+dataset %>%
+  summarize(min_eje = min(ejection_fraction),
+            max_eje = max(ejection_fraction)) 
+```
+
+Ejection_fraction ranged from 14 to 80. We groupped the values of the variable into bands so that we could better analyze its behavior.
+
+```{r }
+dataset <- dataset %>% 
+  mutate(eje_range = as.factor(case_when(ejection_fraction <= 20 ~ "<=20",
+                                         ejection_fraction >20 & ejection_fraction <=40 ~ "20-40",
+                                         ejection_fraction >40 & ejection_fraction <=60 ~ "40-60",
+                                         ejection_fraction >60 & ejection_fraction <=80 ~ "60-80",
+                                         ejection_fraction >80 ~ ">80"
+  )))
+
+knitr::kable(table(dataset$eje_range, dataset$DEATH_EVENT))
+
+```
+Frequencies showed that for low values of the variable, there was a higher probability that the patient would die.
+
+## d. Age
+
+```{r }
+knitr::kable(table(dataset$age, dataset$DEATH_EVENT))
+```
+
+The patients were between 40 and 95 years old. We groupped the values of the variable into bands so that we could better analyze its behavior.
+
+```{r }
+dataset <- dataset %>% 
+  mutate(age_range = as.factor(case_when(age <= 50 ~ "<=50",
+                                          age >50 & age<=60 ~ "51-60",
+                                          age >60 & age<=70 ~ "61-70",
+                                          age >70 & age<=80 ~ "71-80",
+                                          age>=81 ~ "Over 80"
+         )))
+
+knitr::kable(table(dataset$age_range, dataset$DEATH_EVENT))
+```
+Frequencies showed that only in case of patients with more than 70 years old, there was an higher probability of die.
+
+## e. Diabetes
+
+```{r }
+
+knitr::kable(table(dataset$diabetes, dataset$DEATH_EVENT))
+
+```
+Deaths were equally distributed between patients with and without diabetes.
+
+## f. Anaemia
+
+```{r }
+knitr::kable(table(dataset$anaemia, dataset$DEATH_EVENT))
+
+```
+Deaths were equally distributed between patients with and without anaemia.
+
+## g. Sex
+
+```{r }
+knitr::kable(table(dataset$sex, dataset$DEATH_EVENT))
+
+```
+Deaths were equally distributed between women and men.
+
+## h. Creatinine_phosphokinase
+
+```{r }
+knitr::kable(table(dataset$creatinine_phosphokinase, dataset$DEATH_EVENT))
+
+```
+Deaths were equally distributed between patients with high and low creatinine phosphokinase levels.
+
+## i. High_blood_pressure
+
+```{r }
+knitr::kable(table(dataset$high_blood_pressure, dataset$DEATH_EVENT))
+
+```
+Deaths were equally distributed between patients with high blood pressure (37%) and patients with low blood pressure (29%).
+
+## l. Platelets
+
+```{r }
+knitr::kable(table(dataset$platelets, dataset$DEATH_EVENT))
+
+```
+Deaths were equally distributed between patients with high and low platelets levels
+
+## m. Serum_sodium
+
+```{r }
+knitr::kable(table(dataset$serum_sodium, dataset$DEATH_EVENT))
+
+```
+The most important number of survived patients were between 134 and 141
+
+## n. Smoking
+
+```{r }
+knitr::kable(table(dataset$smoking, dataset$DEATH_EVENT))
+
+```
+Smoking patients showed a similar probability to die (31%) respect to no-smoking patients (32%).
+
+## o. Time
+
+```{r }
+knitr::kable(table(dataset$time, dataset$DEATH_EVENT))
+
+```
+We groupped the values of the variable into bands so that we could better analyze its behavior.
+
+```{r }
+dataset <- dataset %>% 
+  mutate(time_range = as.factor(case_when(time <= 50 ~ "<=50",
+                                         time >50 & time <=100 ~ "50-100",
+                                         time >100 & time <=150 ~ "100-150",
+                                         time >150 & time <=200 ~ "150-200",
+                                         time >200 & time <=250 ~ "200-250",
+                                         time >250 ~ ">250"
+  )))
+
+knitr::kable(table(dataset$time_range, dataset$DEATH_EVENT))
+
+```
+Analyzing the time variable, no particular trends were found.
+
+## 2.4 Data visualization
+
+Serum creatinine and ejection fraction showed a key role in predicting death events. In the following graphs, we tried to visualize the behavior of the two variables, and in particular their relationship with the target variable (death event).
+
+```{r }
+ggplot(data = dataset, aes(x = serum_creatinine, y = DEATH_EVENT)) + 
+  geom_point() +
+  labs(x = "Serum creatinine", 
+       y = "Death") +
+  ggtitle("Count of death/ Serum creatinine")
+
+ggplot(data = dataset, aes(x = ejection_fraction, y = DEATH_EVENT)) + 
+  geom_point() +
+  labs(x = "ejection fraction", 
+       y = "Death") +
+  ggtitle("Count of death/ ejection fraction")
+```
+
+# 3. Machine learning models
+
+Our results showed that serum creatinine and ejection fraction were sufficient to predict survived and dead patients from records.
+So, we tried to select some machine learning models that could be used with these two factors.
+In particular, we selected a KNN (k-Nearest Neighbors) and a random forest, among the most popular models applied in machine learning; moreover, given the nature of the target variable, we decided to try also a logit regression model, whose output is always between 0 and 1.
+
+## 3.1 Data partition
+
+The application of a machine learning model always starts with the subdivision of the database in two parts: a training set and a test set on which then proceed with the validation. Typically 80% of the database becomes the training set, while 20% is used as a test set, but given the choice of a random forest, subject to over-fitting, we preferred a split of 70%-30%.
+
+```{r }
+
+dataset_selection <- dataset %>%
+  select(DEATH_EVENT, serum_creatinine, ejection_fraction)
+set.seed(1)
+index<-createDataPartition(dataset$DEATH_EVENT,times=1,p=0.3,list=FALSE)
+dataset_selection_train <- dataset_selection[index,] 
+dataset_selection_test <- dataset_selection[-index,]
+
+```
+
+## 3.2 The three models
+
+We started fitting the KNN model on the "training set" and determining the predictions on the "test set":
+
+
+```{r }
+knn_fit <- knn3(DEATH_EVENT ~ ., 
+                data = dataset_selection_train, k=5)
+
+y_hat_knn <- predict(knn_fit, dataset_selection_test, type = "prob")
+
+```
+
+Then we fit the random forest model on the "training set" and determined the predictions on the "test set" 
+
+```{r }
+rf_fit <- randomForest(DEATH_EVENT ~ .,data = dataset_selection_train)
+y_hat_rf <- predict(rf_fit, newdata = dataset_selection_test)
+
+```
+We finally fit the logistic regression on the "training set" and determined the predictions on the "test set". 
+
+```{r }
+log_fit <-glm(DEATH_EVENT ~ .,data = dataset_selection_train, family = "binomial")
+y_hat_log <- predict(log_fit, newdata = dataset_selection_test, type = "response")
+
+```
+
+# 4. Models results
+
+At the end we could analized the models results.
+The three models have typical features that distinguish them. The KNN, for example, estimates conditional probabilities in a manner similar to bin smoothing, and is also easily adaptable to multiple dimensions. Random forests, on the other hand, are popular machine learning approaches in which multiple decision trees are averaged (a forest of trees constructed with randomness). Finally, logistic regression is an extension of linear regression that ensures that the estimated conditional probabilities are between 0 and 1. This approach, which uses a logistic transformation, has the limitation of failing to capture the possible nonlinear nature of the true conditional probabilities.
+
+To be able to understand which model performed better, we looked at the RMSE of each model, evaluating it on the "test set". In order to calculate the RMSE, we took the residuals of each model calculated on the "test set"; then we squared each of these and then we took the mean and then the square root of this value.
+
+The lowest the RMSE, the better performance we had from the model.
+
+```{r }
+rmses <- dataset_selection_test %>%
+  mutate(residual_knn = y_hat_knn - DEATH_EVENT,
+         residual_rf = y_hat_rf - DEATH_EVENT,
+         residual_log = y_hat_log - DEATH_EVENT) %>%
+  summarize(rmse_knn_model = sqrt(mean(residual_knn^2)),
+            rmse_rf_model = sqrt(mean(residual_rf^2)),
+            rmse_log_model = sqrt(mean(residual_log^2)),
+            )
+
+knitr::kable(rmses)
+```
+
+Logistic regression showed the lowest RMSE: it was the best model.
+
+# 5. Conclusions
+
+In this analysis we tried to make a death event prediction. We analized a dataset of 299 patients with heart failure collected in 2015 and we found that a good machine learning model for death event was the logistic regression.
+
+Our results of this two-feature model showed that serum creatinine and ejection fraction were sufficient to predict survival of heart failure patients from medical records.
+
+This discovery has the potential to impact on clinical practice, becoming a new supporting tool for physicians when predicting if a heart failure patient will survive or not. Indeed, medical doctors aiming at understanding if a patient will survive after heart failure may focus mainly on serum creatinine and ejection fraction.
+
+For future work, other models could be tested, maybe doing an ensembling able to aggregate the property of different models.
+
